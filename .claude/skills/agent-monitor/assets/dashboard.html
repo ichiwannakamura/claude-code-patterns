@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Monitor</title>
+<style>
+  :root {
+    --bg-primary:#0d1117; --bg-secondary:#161b22; --bg-card:#1c2128;
+    --border:#30363d; --text-primary:#e6edf3; --text-secondary:#8b949e;
+    --text-muted:#484f58;
+    --accent-waiting:#e2b714; --accent-planning:#a78bfa; --accent-working:#34d399;
+    --accent-completed:#636e72; --accent-error:#f87171; --accent-permission_wait:#fbbf24;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans JP', sans-serif;
+    background:var(--bg-primary); color:var(--text-primary);
+    font-size:13px; line-height:1.4; overflow-x:hidden;
+    user-select:none; -webkit-app-region:drag;
+  }
+
+  /* Header */
+  .header {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:10px 14px; background:var(--bg-secondary);
+    border-bottom:1px solid var(--border); position:sticky; top:0; z-index:10;
+  }
+  .header-left { display:flex; align-items:center; gap:8px; }
+  .header-title { font-size:14px; font-weight:600; letter-spacing:0.3px; }
+
+  .pulse-dot {
+    width:8px; height:8px; border-radius:50%;
+    background:var(--accent-working); animation:pulse 2s ease-in-out infinite;
+  }
+  .pulse-dot.idle { background:var(--text-muted); animation:none; }
+
+  @keyframes pulse {
+    0%,100% { opacity:1; transform:scale(1); }
+    50% { opacity:0.5; transform:scale(0.8); }
+  }
+
+  .agent-count {
+    font-size:12px; color:var(--text-secondary); background:var(--bg-card);
+    padding:2px 8px; border-radius:10px; border:1px solid var(--border);
+  }
+
+  /* Agent list */
+  .agent-list {
+    padding:8px; padding-bottom:40px;
+    display:flex; flex-direction:column; gap:6px;
+    -webkit-app-region:no-drag; min-height:calc(100vh - 45px);
+  }
+
+  .agent-card {
+    background:var(--bg-card); border:1px solid var(--border);
+    border-radius:8px; padding:10px 12px; transition:all 0.3s ease;
+    border-left:3px solid var(--state-color, transparent);
+  }
+  .agent-card[data-state="completed"] { opacity:0.6; }
+  .agent-card[data-state="working"] { box-shadow:0 0 12px rgba(52,211,153,0.08); }
+
+  .agent-header {
+    display:flex; align-items:center;
+    justify-content:space-between; margin-bottom:4px;
+  }
+  .agent-type {
+    display:flex; align-items:center; gap:6px;
+    font-weight:600; font-size:13px;
+  }
+  .agent-type .icon { font-size:14px; }
+
+  .agent-state-badge {
+    font-size:11px; padding:1px 7px; border-radius:8px; font-weight:500;
+    background:color-mix(in srgb, var(--state-color) 15%, transparent);
+    color:var(--state-color);
+  }
+
+  .agent-detail {
+    font-size:11px; color:var(--text-secondary);
+    margin-top:2px; display:flex; align-items:center; gap:6px;
+  }
+  .agent-detail .tool-name {
+    color:var(--text-primary); background:var(--bg-secondary);
+    padding:0 5px; border-radius:3px;
+    font-family:'SF Mono','Consolas',monospace; font-size:10px;
+  }
+
+  .elapsed {
+    font-family:'SF Mono','Consolas',monospace;
+    font-size:11px; color:var(--text-muted);
+  }
+
+  /* Summary bar */
+  .summary-bar {
+    display:flex; align-items:center; justify-content:center;
+    gap:12px; padding:8px 14px;
+    background:var(--bg-secondary); border-top:1px solid var(--border);
+    position:fixed; bottom:0; left:0; right:0;
+    font-size:11px; -webkit-app-region:no-drag;
+  }
+  .summary-item { display:flex; align-items:center; gap:3px; }
+  .summary-item .dot { width:6px; height:6px; border-radius:50%; background:var(--dot-color); }
+
+  /* Empty / connection states */
+  .empty-state { text-align:center; padding:60px 20px; color:var(--text-muted); }
+  .empty-state .icon { font-size:32px; margin-bottom:12px; }
+  .empty-state .text { font-size:13px; }
+
+  .connection-status {
+    position:fixed; top:46px; left:0; right:0;
+    text-align:center; padding:4px; font-size:11px;
+    background:rgba(248,113,113,0.15); color:var(--accent-error);
+    display:none; z-index:20;
+  }
+  .connection-status.visible { display:block; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <div class="pulse-dot idle" id="pulseDot"></div>
+    <span class="header-title">Agent Monitor</span>
+  </div>
+  <span class="agent-count" id="agentCount">0 agents</span>
+</div>
+
+<div class="connection-status" id="connStatus">切断 — 再接続中...</div>
+
+<div class="agent-list" id="agentList">
+  <div class="empty-state">
+    <div class="icon">🤖</div>
+    <div class="text">エージェント待機中<br><small>サブエージェントが起動すると表示されます</small></div>
+  </div>
+</div>
+
+<div class="summary-bar" id="summaryBar">
+  <div class="summary-item"><div class="dot" style="--dot-color:var(--accent-waiting)"></div><span>待: <b id="sWaiting">0</b></span></div>
+  <div class="summary-item"><div class="dot" style="--dot-color:var(--accent-planning)"></div><span>構: <b id="sPlanning">0</b></span></div>
+  <div class="summary-item"><div class="dot" style="--dot-color:var(--accent-working)"></div><span>作: <b id="sWorking">0</b></span></div>
+  <div class="summary-item"><div class="dot" style="--dot-color:var(--accent-completed)"></div><span>完: <b id="sCompleted">0</b></span></div>
+</div>
+
+<script>
+(function() {
+  "use strict";
+
+  const STATE_COLORS = {
+    waiting: "var(--accent-waiting)",
+    planning: "var(--accent-planning)",
+    working: "var(--accent-working)",
+    completed: "var(--accent-completed)",
+    error: "var(--accent-error)",
+    permission_wait: "var(--accent-permission_wait)",
+  };
+
+  let currentState = null, eventSource = null, reconnectTimer = null;
+
+  function formatElapsed(startedAt) {
+    if (!startedAt) return "";
+    const elapsed = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000);
+    if (elapsed < 0) return "0:00";
+    const m = Math.floor(elapsed / 60), s = elapsed % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  }
+
+  function truncate(str, max) {
+    return !str ? "" : str.length > max ? str.slice(0, max) + "..." : str;
+  }
+
+  function render(state) {
+    currentState = state;
+    const list = document.getElementById("agentList");
+    const agents = Object.values(state.agents || {});
+    const stats = state.stats || {};
+
+    const activeCount = (stats.waiting||0) + (stats.planning||0) + (stats.working||0);
+    document.getElementById("agentCount").textContent = `${stats.total||0} agents`;
+    document.getElementById("pulseDot").className =
+      activeCount > 0 ? "pulse-dot" : "pulse-dot idle";
+
+    document.getElementById("sWaiting").textContent = stats.waiting || 0;
+    document.getElementById("sPlanning").textContent = stats.planning || 0;
+    document.getElementById("sWorking").textContent = stats.working || 0;
+    document.getElementById("sCompleted").textContent = stats.completed || 0;
+
+    if (agents.length === 0) {
+      list.innerHTML = '<div class="empty-state"><div class="icon">🤖</div>'
+        + '<div class="text">エージェント待機中<br><small>サブエージェントが起動すると表示されます</small></div></div>';
+      return;
+    }
+
+    const stateOrder = { working:0, planning:1, waiting:2, error:3, completed:4 };
+    agents.sort((a, b) => {
+      const oa = stateOrder[a.state] ?? 5, ob = stateOrder[b.state] ?? 5;
+      return oa !== ob ? oa - ob : new Date(b.updated_at) - new Date(a.updated_at);
+    });
+
+    let html = "";
+    for (const agent of agents) {
+      const ds = agent.display_state || agent.state;
+      const sc = STATE_COLORS[ds] || STATE_COLORS.working;
+      const toolDisplay = agent.last_tool;
+
+      html += `
+        <div class="agent-card" data-state="${ds}" data-id="${agent.id}" style="--state-color:${sc}">
+          <div class="agent-header">
+            <div class="agent-type">
+              <span class="icon">${agent.icon || "🤖"}</span>
+              <span>${agent.type || "unknown"}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span class="agent-state-badge" data-state="${ds}">${agent.state_jp || ds}</span>
+              <span class="elapsed" data-started="${agent.started_at}">${formatElapsed(agent.started_at)}</span>
+            </div>
+          </div>
+          ${toolDisplay || agent.description ? `<div class="agent-detail">${toolDisplay ? `<span class="tool-name">${toolDisplay}</span>` : ""}${agent.description ? `<span>${truncate(agent.description, 40)}</span>` : ""}${agent.tool_count > 0 ? `<span style="color:var(--text-muted)">(${agent.tool_count} tools)</span>` : ""}</div>` : ""}
+        </div>`;
+    }
+    list.innerHTML = html;
+  }
+
+  // Merged interval: elapsed timers + window title
+  setInterval(() => {
+    if (!currentState) return;
+    document.querySelectorAll(".elapsed[data-started]").forEach(el => {
+      const card = el.closest(".agent-card");
+      if (card && !["completed", "error"].includes(card.dataset.state)) {
+        el.textContent = formatElapsed(el.dataset.started);
+      }
+    });
+    if (currentState.stats) {
+      const s = currentState.stats;
+      const active = (s.waiting||0) + (s.planning||0) + (s.working||0);
+      document.title = active > 0 ? `(${active}) Agent Monitor` : "Agent Monitor";
+    }
+  }, 1000);
+
+  // SSE connection
+  function connect() {
+    if (eventSource) eventSource.close();
+    eventSource = new EventSource("/events");
+    eventSource.onmessage = (e) => {
+      try {
+        render(JSON.parse(e.data));
+        document.getElementById("connStatus").classList.remove("visible");
+      } catch (err) { console.error("Parse error:", err); }
+    };
+    eventSource.onerror = () => {
+      document.getElementById("connStatus").classList.add("visible");
+      eventSource.close();
+      clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(connect, 2000);
+    };
+  }
+
+  fetch("/api/state").then(r => r.json()).then(render).catch(() => {});
+  connect();
+})();
+</script>
+</body>
+</html>
