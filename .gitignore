@@ -1,0 +1,18 @@
+# .envファイルはGit管理対象外
+.env
+.env.*
+!.env.example
+
+# ビルド成果物
+dist/
+
+# 依存パッケージ
+node_modules/
+
+# OS固有ファイル
+Thumbs.db
+.DS_Store
+
+# IDE設定
+.vscode/
+.idea/
